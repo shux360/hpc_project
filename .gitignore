@@ -1,0 +1,138 @@
+# Node.js
+node_modules/
+package-lock.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.exe
+*.out
+*.app
+*.lib
+*.dll
+*.dylib
+*.su
+*.gch
+*.pch
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.vs/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.bak
+*.backup
+*~
+
+# Image processing outputs (local testing)
+uploads/
+results/
+ui/backend/uploads/
+ui/backend/results/
+ui/results/
+
+# Generated images from processing
+*_denoised.png
+*_edges.png
+*_baseline.png
+serial_edges.png
+openmp_edges.png
+pthread_edges.png
+mpi_edges.png
+hybrid_edges.png
+
+# Python temp scripts
+rmse_calc_*.py
+
+# VS Code workspace
+.vscode/
+.vscode/settings.json
+.vscode/launch.json
+
+# Dependencies lock files (optional, uncomment if needed)
+# package-lock.json
+# yarn.lock
+
+# Local development
+.cache/
+.coverage
+.pytest_cache/
+htmlcov/
+
+# OS temp files
+$RECYCLE.BIN/
+
+# WSL specific
+/mnt
