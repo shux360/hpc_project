@@ -213,6 +213,18 @@ export default function App() {
                   </div>
                 )}
               </div>
+              {result.denoisedImage && result.edgeImage && (
+                <div className="result-images">
+                  <div className="image-container">
+                    <h4>Denoised</h4>
+                    <img src={result.denoisedImage} alt={`${result.method} denoised`} className="result-image" />
+                  </div>
+                  <div className="image-container">
+                    <h4>Edges</h4>
+                    <img src={result.edgeImage} alt={`${result.method} edges`} className="result-image" />
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="placeholder">
@@ -243,13 +255,43 @@ export default function App() {
                     <tr key={idx}>
                       <td className="method-col">{res.method}</td>
                       <td>{res.executionTime?.toFixed(2)}</td>
-                      <td>{res.rmse?.toFixed(4) || 'N/A'}</td>
+                      <td>{res.rmse !== null && res.rmse !== undefined ? res.rmse.toFixed(4) : 'N/A'}</td>
                       <td className="speedup-col">{speedup}x</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+          </div>
+
+          <h2>Detailed Results</h2>
+          <div className="all-results-container">
+            {allResults.map((res, idx) => (
+              <div key={idx} className="result-item">
+                <div className="result-header">
+                  <span className="method-badge">{res.method?.toUpperCase()}</span>
+                  <div className="result-metrics-inline">
+                    <span>{res.executionTime?.toFixed(2)} ms</span>
+                    <span>RMSE: {res.rmse !== null && res.rmse !== undefined ? res.rmse.toFixed(4) : 'N/A'}</span>
+                    {res.method !== 'serial' && (
+                      <span>{((allResults[0]?.executionTime || 1) / (res.executionTime || 1)).toFixed(2)}x speedup</span>
+                    )}
+                  </div>
+                </div>
+                {res.denoisedImage && res.edgeImage && (
+                  <div className="result-images-row">
+                    <div className="image-box">
+                      <img src={res.denoisedImage} alt={`${res.method} denoised`} />
+                      <p>Denoised</p>
+                    </div>
+                    <div className="image-box">
+                      <img src={res.edgeImage} alt={`${res.method} edges`} />
+                      <p>Edges</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
