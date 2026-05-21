@@ -50,7 +50,20 @@ export default function App() {
         setSerialTime(response.executionTime);
       }
     } catch (err) {
-      setError(err.message || 'Error processing image');
+      const msg = err.message || String(err);
+      if (msg.includes('CUDA executable not found')) {
+        setError(
+          'CUDA is not available on this machine.\n\n' +
+          'CUDA requires an NVIDIA GPU. To test it:\n' +
+          '1. Open colab_cuda_test.ipynb in Google Colab\n' +
+          '2. Enable GPU runtime (Runtime > Change runtime type > T4 GPU)\n' +
+          '3. Run all cells to verify the CUDA code works\n\n' +
+          'Once you have a GPU machine, compile with:\n' +
+          'cd cuda && nvcc -O2 denoise_cuda.cu -o cuda_denoise_edge $(pkg-config --cflags --libs opencv4)'
+        );
+      } else {
+        setError(msg || 'Error processing image');
+      }
     } finally {
       setLoading(false);
     }
@@ -66,7 +79,7 @@ export default function App() {
     setError('');
     const results = [];
 
-    const methods = ['serial', 'openmp', 'pthreads', 'mpi', 'hybrid'];
+    const methods = ['serial', 'openmp', 'pthreads', 'mpi', 'hybrid', 'cuda'];
     for (const m of methods) {
       try {
         const response = await processImage({
@@ -137,6 +150,7 @@ export default function App() {
               <option value="pthreads">Pthreads</option>
               <option value="mpi">MPI</option>
               <option value="hybrid">Hybrid (OpenMP + MPI)</option>
+              <option value="cuda">CUDA (GPU)</option>
             </select>
           </div>
 
@@ -148,7 +162,7 @@ export default function App() {
               max="16"
               value={threads}
               onChange={(e) => setThreads(Number(e.target.value))}
-              disabled={loading || method === 'serial'}
+              disabled={loading || method === 'serial' || method === 'cuda'}
               className="slider"
             />
           </div>
@@ -165,6 +179,12 @@ export default function App() {
               className="slider"
             />
           </div>
+
+          {method === 'cuda' && (
+            <div className="info-box">
+              GPU parallelism is managed automatically via CUDA thread blocks (16×16 per block). Requires a CUDA-capable GPU.
+            </div>
+          )}
 
           <div className="button-group">
             <button

@@ -168,12 +168,17 @@ function buildCommand(method, imagePath, threads, processes) {
 
     case 'hybrid': {
       const exe = path.join(projectRoot, 'hybrid', 'denoise_hybrid');
-      return { 
-        exe, 
+      return {
+        exe,
         args: [imagePath, String(threads || 4)],
         isMPI: true,
         processes: processes || 2
       };
+    }
+
+    case 'cuda': {
+      const exe = path.join(projectRoot, 'cuda', 'cuda_denoise_edge');
+      return { exe, args: [imagePath] };
     }
 
     default:
@@ -204,6 +209,10 @@ function getOutputFiles(method) {
     hybrid: {
       denoised: path.join(projectRoot, 'hybrid_denoised.png'),
       edges: path.join(projectRoot, 'hybrid_edges.png')
+    },
+    cuda: {
+      denoised: path.join(projectRoot, 'cuda_denoised.png'),
+      edges: path.join(projectRoot, 'cuda_edges.png')
     }
   };
 
@@ -250,18 +259,20 @@ function runCommand(cmdObj) {
     console.log(`Testing file existence: ${testCmd}`);
     
     exec(testCmd, { timeout: 5000 }, (testError, testOutput) => {
-      if (testError) {
-        console.error(`File not found at ${wslExe}`);
-        console.error(`Test output: ${testOutput}`);
-        // Try listing the parent directory
-        const parentDir = wslExe.substring(0, wslExe.lastIndexOf('/'));
-        const lsCmd = `wsl.exe -d Ubuntu -- ls -la ${parentDir}`;
-        console.log(`Listing directory: ${lsCmd}`);
-        exec(lsCmd, { timeout: 5000 }, (lsError, lsOutput) => {
-          console.log(`Directory listing:\n${lsOutput}`);
-        });
+      if (testError || !testOutput.includes('File exists')) {
+        console.error(`Executable not found: ${wslExe}`);
+        if (wslExe.includes('cuda')) {
+          reject(
+            'CUDA executable not found. CUDA requires a GPU and must be compiled first.\n' +
+            'Use the colab_cuda_test.ipynb notebook to verify on Google Colab, then compile on a machine with an NVIDIA GPU:\n' +
+            '  cd cuda && nvcc -O2 denoise_cuda.cu -o cuda_denoise_edge $(pkg-config --cflags --libs opencv4)'
+          );
+        } else {
+          reject(`Executable not found: ${wslExe}\nPlease compile the project first.`);
+        }
+        return;
       }
-      
+
       // Execute the command with working directory context
       const wslCmd = `wsl.exe -d Ubuntu -- sh -c "${command}"`;
       console.log(`Final WSL invocation: ${wslCmd}`);

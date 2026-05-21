@@ -191,6 +191,17 @@
   transform: none;
 }
 
+.info-box {
+  background-color: #e8f4fd;
+  border: 1px solid #90caf9;
+  color: #1565c0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 0.85em;
+  margin-top: 8px;
+  line-height: 1.4;
+}
+
 .error-box {
   background-color: #fee;
   border: 1px solid #fcc;

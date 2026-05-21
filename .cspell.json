@@ -1,0 +1,8 @@
+{
+  "version": "0.2",
+  "words": [
+    "CUDA", "cuda", "nvcc", "ipynb", "Colab", "colab",
+    "denoise", "denoised", "openmp", "pthreads", "mpirun",
+    "sobel", "gaussian", "grayscale"
+  ]
+}
