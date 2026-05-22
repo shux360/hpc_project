@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  cuda-builder:
+    image: nvidia/cuda:12.9.0-devel-ubuntu24.04
+    container_name: hpc-cuda-build
+    volumes:
+      - .:/workspace
+      - ./cuda:/workspace/cuda
+    working_dir: /workspace
+    command: >
+      bash -c "
+        echo '=== Installing Dependencies ===' &&
+        apt-get update &&
+        apt-get install -y build-essential libopencv-dev pkg-config cmake &&
+        echo '' &&
+        echo '=== CUDA Information ===' &&
+        nvcc --version &&
+        echo '' &&
+        echo '=== Compiling CUDA Basic Version ===' &&
+        cd cuda &&
+        nvcc -O3 -arch=sm_75 -I/usr/include/opencv4 -o denoise_cuda_edge denoise_cuda_edge.cu -lopencv_core -lopencv_imgproc -lopencv_imgcodecs &&
+        ls -lh denoise_cuda_edge &&
+        echo '✓ Basic compilation successful' &&
+        echo '' &&
+        echo '=== Compiling CUDA Optimized Version ===' &&
+        nvcc -O3 -arch=sm_75 -I/usr/include/opencv4 -o denoise_cuda_edge_optimized denoise_cuda_edge_optimized.cu -lopencv_core -lopencv_imgproc -lopencv_imgcodecs &&
+        ls -lh denoise_cuda_edge_optimized &&
+        echo '✓ Optimized compilation successful' &&
+        echo '' &&
+        echo '=== CMake Build ===' &&
+        mkdir -p build &&
+        cd build &&
+        cmake -DCMAKE_CUDA_ARCHITECTURES=75 .. &&
+        make &&
+        echo '✓ CMake build successful' &&
+        echo '' &&
+        echo '=== Build Complete ===' &&
+        ls -lh /workspace/cuda/denoise_cuda*
+      "
+    # Uncomment to keep container running for interactive use
+    # stdin_open: true
+    # tty: true
+    # command: /bin/bash

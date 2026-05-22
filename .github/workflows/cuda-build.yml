@@ -1,0 +1,93 @@
+name: CUDA Build & Test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  cuda-build:
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:12.9.0-devel-ubuntu24.04
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install Dependencies
+      run: |
+        apt-get update
+        apt-get install -y \
+          build-essential \
+          libopencv-dev \
+          pkg-config \
+          cmake
+    
+    - name: Verify CUDA
+      run: |
+        nvcc --version
+        nvidia-smi || echo "No GPU in runner, but CUDA toolkit available"
+    
+    - name: Create CUDA directory
+      run: mkdir -p /workspace/cuda
+    
+    - name: Copy CUDA source files
+      run: |
+        cp cuda/denoise_cuda_edge.cu /workspace/cuda/
+        cp cuda/denoise_cuda_edge_optimized.cu /workspace/cuda/
+        cp cuda/CMakeLists.txt /workspace/cuda/
+    
+    - name: Compile CUDA Basic Version
+      run: |
+        cd /workspace/cuda
+        nvcc -O3 -arch=sm_75 \
+          -I/usr/include/opencv4 \
+          -o denoise_cuda_edge denoise_cuda_edge.cu \
+          -lopencv_core -lopencv_imgproc -lopencv_imgcodecs
+        ls -lh denoise_cuda_edge
+        echo "✓ Basic CUDA compilation successful"
+    
+    - name: Compile CUDA Optimized Version
+      run: |
+        cd /workspace/cuda
+        nvcc -O3 -arch=sm_75 \
+          -I/usr/include/opencv4 \
+          -o denoise_cuda_edge_optimized denoise_cuda_edge_optimized.cu \
+          -lopencv_core -lopencv_imgproc -lopencv_imgcodecs
+        ls -lh denoise_cuda_edge_optimized
+        echo "✓ Optimized CUDA compilation successful"
+    
+    - name: Compile with CMake
+      run: |
+        cd /workspace/cuda
+        mkdir -p build
+        cd build
+        cmake -DCMAKE_CUDA_ARCHITECTURES=75 ..
+        make
+        echo "✓ CMake build successful"
+    
+    - name: Upload Compiled Binaries
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: cuda-binaries
+        path: /workspace/cuda/denoise_cuda_edge*
+        retention-days: 30
+    
+    - name: Upload CMake Binaries
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: cuda-cmake-binaries
+        path: /workspace/cuda/build/denoise_cuda_edge*
+        retention-days: 30
+    
+    - name: Build Summary
+      if: always()
+      run: |
+        echo "=== CUDA Build Summary ==="
+        echo "✓ Basic version: $(test -f /workspace/cuda/denoise_cuda_edge && echo 'SUCCESS' || echo 'FAILED')"
+        echo "✓ Optimized version: $(test -f /workspace/cuda/denoise_cuda_edge_optimized && echo 'SUCCESS' || echo 'FAILED')"
+        echo "✓ CMake build: $(test -f /workspace/cuda/build/denoise_cuda_edge && echo 'SUCCESS' || echo 'FAILED')"
