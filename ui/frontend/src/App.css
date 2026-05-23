@@ -202,6 +202,30 @@
   line-height: 1.4;
 }
 
+.block-size-select {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+  font-size: 0.9em;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+.block-size-select option {
+  background: #2c3e6b;
+  color: white;
+}
+
+.control-hint {
+  font-size: 0.78em;
+  color: rgba(255, 255, 255, 0.65);
+  margin-top: 5px;
+  line-height: 1.4;
+}
+
 .error-box {
   background-color: #fee;
   border: 1px solid #fcc;

@@ -64,11 +64,20 @@ __global__ void sobelEdgeKernel(const unsigned char* input, unsigned char* outpu
 int main(int argc, char** argv)
 {
     if (argc < 2) {
-        cerr << "Usage: ./cuda_denoise_edge <image_path>" << endl;
+        cerr << "Usage: ./cuda_denoise_edge <image_path> [block_size]" << endl;
+        cerr << "  block_size: thread block dimension (8, 16, or 32). Default: 16" << endl;
         return 1;
     }
 
     string imagePath = argv[1];
+    int bs = (argc >= 3) ? atoi(argv[2]) : 16;
+
+    // Clamp to valid CUDA block sizes for 2D kernels (max 1024 threads/block)
+    if (bs != 8 && bs != 16 && bs != 32) {
+        cerr << "Invalid block size " << bs << ". Using default 16." << endl;
+        bs = 16;
+    }
+
     Mat img = imread(imagePath, IMREAD_GRAYSCALE);
     if (img.empty()) {
         cerr << "Failed to load image" << endl;
@@ -86,9 +95,8 @@ int main(int argc, char** argv)
 
     cudaMemcpy(d_input, img.data, imgSize, cudaMemcpyHostToDevice);
 
-    dim3 blockSize(16, 16);
-    dim3 gridSize((cols + blockSize.x - 1) / blockSize.x,
-                  (rows + blockSize.y - 1) / blockSize.y);
+    dim3 blockSize(bs, bs);
+    dim3 gridSize((cols + bs - 1) / bs, (rows + bs - 1) / bs);
 
     auto start = high_resolution_clock::now();
 
@@ -114,6 +122,10 @@ int main(int argc, char** argv)
     imwrite("cuda_edges.png", edges);
 
     cout << "CUDA execution time: " << elapsed << " ms" << endl;
+    cout << "Block size: " << bs << "x" << bs
+         << " (" << bs * bs << " threads/block)" << endl;
+    cout << "Grid size: " << gridSize.x << "x" << gridSize.y
+         << " (" << gridSize.x * gridSize.y << " blocks)" << endl;
     cout << "Image size: " << cols << "x" << rows << endl;
 
     return 0;

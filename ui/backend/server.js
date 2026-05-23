@@ -137,7 +137,7 @@ except Exception as e:
   });
 }
 
-function buildCommand(method, imagePath, threads, processes) {
+function buildCommand(method, imagePath, threads, processes, blockSize) {
   const projectRoot = path.resolve(__dirname, '../../');
 
   switch (method) {
@@ -178,7 +178,8 @@ function buildCommand(method, imagePath, threads, processes) {
 
     case 'cuda': {
       const exe = path.join(projectRoot, 'cuda', 'cuda_denoise_edge');
-      return { exe, args: [imagePath] };
+      const validBlock = [8, 16, 32].includes(parseInt(blockSize)) ? parseInt(blockSize) : 16;
+      return { exe, args: [imagePath, String(validBlock)] };
     }
 
     default:
@@ -295,7 +296,7 @@ function runCommand(cmdObj) {
 
 app.post('/api/process', upload.single('image'), async (req, res) => {
   try {
-    const { method, threads, processes } = req.body;
+    const { method, threads, processes, blockSize } = req.body;
 
     if (!req.file) {
       return res.status(400).json({ error: 'Image is required' });
@@ -306,7 +307,7 @@ app.post('/api/process', upload.single('image'), async (req, res) => {
     }
 
     const imagePath = req.file.path;
-    const cmdObj = buildCommand(method, imagePath, threads, processes);
+    const cmdObj = buildCommand(method, imagePath, threads, processes, blockSize);
 
     const output = await runCommand(cmdObj);
     const executionTime = parseExecutionTime(output);

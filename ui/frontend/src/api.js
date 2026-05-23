@@ -1,9 +1,10 @@
-export async function processImage({ file, method, threads, processes }) {
+export async function processImage({ file, method, threads, processes, blockSize }) {
   const formData = new FormData();
   formData.append("image", file);
   formData.append("method", method);
   formData.append("threads", String(threads || 1));
   formData.append("processes", String(processes || 1));
+  formData.append("blockSize", String(blockSize || 16));
 
   const response = await fetch("/api/process", {
     method: "POST",

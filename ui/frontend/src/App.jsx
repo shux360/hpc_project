@@ -8,6 +8,7 @@ export default function App() {
   const [method, setMethod] = useState('openmp');
   const [threads, setThreads] = useState(4);
   const [processes, setProcesses] = useState(2);
+  const [blockSize, setBlockSize] = useState(16);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -41,7 +42,8 @@ export default function App() {
         file: selectedFile,
         method,
         threads: parseInt(threads),
-        processes: parseInt(processes)
+        processes: parseInt(processes),
+        blockSize: parseInt(blockSize)
       });
       setResult(response);
       
@@ -86,7 +88,8 @@ export default function App() {
           file: selectedFile,
           method: m,
           threads: m === 'serial' ? 1 : parseInt(threads),
-          processes: 1
+          processes: 1,
+          blockSize: parseInt(blockSize)
         });
         results.push(response);
         // Track the first (serial) execution time for speedup calculation
@@ -181,8 +184,22 @@ export default function App() {
           </div>
 
           {method === 'cuda' && (
-            <div className="info-box">
-              GPU parallelism is managed automatically via CUDA thread blocks (16×16 per block). Requires a CUDA-capable GPU.
+            <div className="control-group">
+              <label>Block Size: {blockSize}×{blockSize} ({blockSize * blockSize} threads/block)</label>
+              <select
+                value={blockSize}
+                onChange={(e) => setBlockSize(Number(e.target.value))}
+                disabled={loading}
+                className="block-size-select"
+              >
+                <option value={8}>8×8 — 64 threads/block (fine grain)</option>
+                <option value={16}>16×16 — 256 threads/block (recommended)</option>
+                <option value={32}>32×32 — 1024 threads/block (max occupancy)</option>
+              </select>
+              <p className="control-hint">
+                Grid: {'≈'} {Math.ceil(1024 / blockSize)}×{Math.ceil(1024 / blockSize)} blocks for a 1024×1024 image.
+                Requires a CUDA-capable NVIDIA GPU.
+              </p>
             </div>
           )}
 
