@@ -339,6 +339,44 @@
   overflow-x: auto;
 }
 
+.optimal-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.optimal-summary > div {
+  background: #f8f8ff;
+  border-left: 4px solid #667eea;
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 4px;
+}
+
+.summary-label {
+  color: #666;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.optimal-summary strong {
+  color: #333;
+}
+
+.optimal-summary span:last-child {
+  color: #f5576c;
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .optimal-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

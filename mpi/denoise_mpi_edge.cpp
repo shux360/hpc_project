@@ -22,10 +22,19 @@ static const int SOBEL_Y[3][3] = {
     {0, 0, 0},
     {1, 2, 1}};
 
-void gaussianLocal(const Mat &input, Mat &output)
+void gaussianLocal(const Mat &input, Mat &output, int startRow)
 {
-    for (int i = 1; i < input.rows - 1; i++)
+    for (int localI = 0; localI < output.rows; localI++)
     {
+        int i = startRow + localI;
+        if (i == 0 || i == input.rows - 1)
+        {
+            input.row(i).copyTo(output.row(localI));
+            continue;
+        }
+
+        output.at<uchar>(localI, 0) = input.at<uchar>(i, 0);
+        output.at<uchar>(localI, input.cols - 1) = input.at<uchar>(i, input.cols - 1);
         for (int j = 1; j < input.cols - 1; j++)
         {
             float sum = 0.0f;
@@ -36,15 +45,21 @@ void gaussianLocal(const Mat &input, Mat &output)
                     sum += input.at<uchar>(i + ki, j + kj) * GAUSS[ki + 1][kj + 1];
                 }
             }
-            output.at<uchar>(i, j) = static_cast<uchar>(sum);
+            output.at<uchar>(localI, j) = static_cast<uchar>(sum);
         }
     }
 }
 
-void sobelLocal(const Mat &input, Mat &output)
+void sobelLocal(const Mat &input, Mat &output, int startRow)
 {
-    for (int i = 1; i < input.rows - 1; i++)
+    for (int localI = 0; localI < output.rows; localI++)
     {
+        int i = startRow + localI;
+        if (i == 0 || i == input.rows - 1)
+        {
+            continue;
+        }
+
         for (int j = 1; j < input.cols - 1; j++)
         {
             int gx = 0, gy = 0;
@@ -58,7 +73,7 @@ void sobelLocal(const Mat &input, Mat &output)
                 }
             }
             int mag = static_cast<int>(sqrt(gx * gx + gy * gy));
-            output.at<uchar>(i, j) = saturate_cast<uchar>(mag);
+            output.at<uchar>(localI, j) = saturate_cast<uchar>(mag);
         }
     }
 }
@@ -95,25 +110,33 @@ int main(int argc, char **argv)
     int remainder = rows % size;
     int myRows = localRows + (rank < remainder ? 1 : 0);
     vector<int> sendcounts(size), displs(size);
-    if (rank == 0)
+    int offset = 0;
+    for (int i = 0; i < size; i++)
     {
-        int offset = 0;
-        for (int i = 0; i < size; i++)
-        {
-            int r = localRows + (i < remainder ? 1 : 0);
-            sendcounts[i] = r * cols;
-            displs[i] = offset;
-            offset += sendcounts[i];
-        }
+        int r = localRows + (i < remainder ? 1 : 0);
+        sendcounts[i] = r * cols;
+        displs[i] = offset;
+        offset += sendcounts[i];
     }
-    Mat localImg(myRows, cols, CV_8UC1);
-    MPI_Scatterv(rank == 0 ? fullImg.data : nullptr, sendcounts.data(), displs.data(), MPI_UNSIGNED_CHAR,
-                 localImg.data, myRows * cols, MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+
+    if (rank != 0)
+    {
+        fullImg = Mat(rows, cols, CV_8UC1);
+    }
+    MPI_Bcast(fullImg.data, rows * cols, MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
+
+    int startRow = displs[rank] / cols;
     double start = MPI_Wtime();
-    Mat localDenoised = localImg.clone();
-    gaussianLocal(localImg, localDenoised);
-    Mat localEdges = Mat::zeros(localDenoised.size(), CV_8UC1);
-    sobelLocal(localDenoised, localEdges);
+    Mat localDenoised(myRows, cols, CV_8UC1);
+    gaussianLocal(fullImg, localDenoised, startRow);
+
+    Mat fullDenoised(rows, cols, CV_8UC1);
+    MPI_Allgatherv(localDenoised.data, myRows * cols, MPI_UNSIGNED_CHAR,
+                   fullDenoised.data, sendcounts.data(), displs.data(), MPI_UNSIGNED_CHAR,
+                   MPI_COMM_WORLD);
+
+    Mat localEdges = Mat::zeros(myRows, cols, CV_8UC1);
+    sobelLocal(fullDenoised, localEdges, startRow);
     double end = MPI_Wtime();
     double localTime = (end - start) * 1000.0;
     double maxTime;
@@ -121,12 +144,9 @@ int main(int argc, char **argv)
     Mat finalDenoised, finalEdges;
     if (rank == 0)
     {
-        finalDenoised = Mat(rows, cols, CV_8UC1);
+        finalDenoised = fullDenoised;
         finalEdges = Mat(rows, cols, CV_8UC1);
     }
-    MPI_Gatherv(localDenoised.data, myRows * cols, MPI_UNSIGNED_CHAR,
-                rank == 0 ? finalDenoised.data : nullptr, sendcounts.data(), displs.data(), MPI_UNSIGNED_CHAR,
-                0, MPI_COMM_WORLD);
     MPI_Gatherv(localEdges.data, myRows * cols, MPI_UNSIGNED_CHAR,
                 rank == 0 ? finalEdges.data : nullptr, sendcounts.data(), displs.data(), MPI_UNSIGNED_CHAR,
                 0, MPI_COMM_WORLD);

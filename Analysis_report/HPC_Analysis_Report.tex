@@ -14,7 +14,7 @@
 \usepackage{listings}
 \usepackage{xltabular}
 \usepackage{fancyhdr}
-\setlength{\headheight}{10pt}
+\setlength{\headheight}{15pt}
 
 \pgfplotsset{compat=1.17}
 
@@ -295,9 +295,10 @@ Message Passing Interface distributes computation across multiple processes, com
 \begin{itemize}
     \item Process-based parallelism (different address spaces)
     \item Row distribution: Process $p$ computes rows $[start:end]$
-    \item \texttt{MPI\_Bcast}: Root broadcasts image dimensions
-    \item \texttt{MPI\_Scatterv}: Distribute image rows to processes
-    \item \texttt{MPI\_Gatherv}: Collect results at root
+    \item \texttt{MPI\_Bcast}: Root broadcasts dimensions and the source image
+    \item Each process computes only its assigned global output rows
+    \item \texttt{MPI\_Allgatherv}: Assemble the complete denoised stage before Sobel processing
+    \item \texttt{MPI\_Gatherv}: Collect final edge rows at root
     \item Tested with process counts: 1, 2, 4, 8
 \end{itemize}
 
@@ -306,19 +307,18 @@ Message Passing Interface distributes computation across multiple processes, com
 MPI_Bcast(&rows, 1, MPI_INT, 0, MPI_COMM_WORLD);
 MPI_Bcast(&cols, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-// Calculate local row distribution
-int localRows = rows / size;
-int remainder = rows % size;
-int myRows = localRows + (rank < remainder ? 1 : 0);
+// Broadcast the source pixels so boundary neighborhoods are available
+MPI_Bcast(fullImg.data, rows * cols, MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
 
-// Scatter image data
-MPI_Scatterv(/*...*/);
+// Compute assigned global rows, preserving neighbouring-row access
+gaussianLocal(fullImg, localDenoised, startRow);
 
-// Process local data
-gaussianLocal(localInput, localOutput);
+// Sobel needs the completed denoised neighbours across partitions
+MPI_Allgatherv(localDenoised.data, /*...*/, fullDenoised.data, /*...*/);
+sobelLocal(fullDenoised, localEdges, startRow);
 
-// Gather results
-MPI_Gatherv(/*...*/);
+// Collect final rows at the root process
+MPI_Gatherv(localEdges.data, /*...*/, finalEdges.data, /*...*/);
 \end{lstlisting}
 
 \begin{figure}[H]
@@ -334,7 +334,7 @@ MPI_Gatherv(/*...*/);
         \includegraphics[width=\linewidth]{mpi_edges.png}
         \caption*{MPI Edge Detection}
     \end{minipage}
-    \caption{MPI Implementation Results}
+    \caption{Validated MPI Output After Boundary-Correction Rebuild}
 \end{figure}
 
 \subsection{5. Hybrid Implementation (MPI + OpenMP)}
@@ -343,8 +343,9 @@ The hybrid approach combines MPI for inter-process communication with OpenMP for
 
 \textbf{Key Features:}
 \begin{itemize}
-    \item MPI processes handle row distribution
+    \item MPI processes handle row ownership and stage-level data exchange
     \item OpenMP threads parallelize column operations within each process
+    \item The denoised image is assembled between stages so Sobel neighborhoods remain correct across process boundaries
     \item Hierarchical parallelism: Message Passing + Shared Memory
     \item Tested configurations:
     \begin{itemize}
@@ -360,15 +361,15 @@ The hybrid approach combines MPI for inter-process communication with OpenMP for
     \begin{minipage}{0.45\textwidth}
         \centering
         \includegraphics[width=\linewidth]{hybrid_denoised.png}
-        \caption*{Hybrid Denoised Output}
+        \caption{Hybrid Denoised Output}
     \end{minipage}
     \hfill
     \begin{minipage}{0.45\textwidth}
         \centering
         \includegraphics[width=\linewidth]{hybrid_edges.png}
-        \caption*{Hybrid Edge Detection}
+        \caption{Hybrid Edge Detection}
     \end{minipage}
-    \caption{Hybrid (MPI + OpenMP) Implementation Results}
+    \caption{Validated Hybrid Output After Boundary-Correction Rebuild}
 \end{figure}
 
 \subsection{6. CUDA Implementation}
@@ -384,6 +385,26 @@ CUDA acceleration runs on GPU hardware (tested on Google Colab with Tesla T4 GPU
     \item Separate execution environment (Colab notebook)
 \end{itemize}
 
+\noindent\textbf{Recorded CUDA experiment.}\\
+The CUDA implementation was executed in Google Colab
+using a $1024 \times 1024$ pixel image. Block sizes of $8 \times 8$, $16 \times 16$, and
+$32 \times 32$ threads were tested; the measured results are reported in Chapter 6.
+
+\begin{figure}[H]
+    \centering
+    \begin{minipage}{0.45\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{cuda_denoised.png}
+        \caption{CUDA Denoised Output}
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.45\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{cuda_edges.png}
+        \caption{CUDA Edge Detection}
+    \end{minipage}
+    \caption{Validated CUDA Output After Boundary-Correction Rebuild}
+\end{figure}
 % \subsection{Parallelization Diagram}
 
 % \begin{figure}[H]
@@ -435,7 +456,9 @@ CUDA acceleration runs on GPU hardware (tested on Google Colab with Tesla T4 GPU
 
 \section{Visual Results}
 
-Figure \ref{fig:processing_results} shows the visual output of the denoising and edge detection algorithms across different implementations. All implementations produce visually identical results, confirming functional correctness.
+Figure \ref{fig:processing_results} shows representative output images regenerated for the
+$1024 \times 1024$ benchmark input. Quantitative comparison confirms that the refreshed
+OpenMP, Pthreads, MPI, and Hybrid outputs match the serial baseline exactly.
 
 \begin{figure}[H]
     \centering
@@ -462,7 +485,7 @@ Figure \ref{fig:processing_results} shows the visual output of the denoising and
         \includegraphics[width=\linewidth]{serial_edges.png}
         \\{\small Edges Detected}
     \end{minipage}
-    \caption{Denoising and Edge Detection Results Across Implementations (1024×1024 image)}
+    \caption{Regenerated Denoising and Edge Detection Validation Images ($1024 \times 1024$ pixels)}
     \label{fig:processing_results}
 \end{figure}
 
@@ -476,9 +499,9 @@ To ensure correctness of parallel implementations, we compute the Root Mean Squa
 
 where $m \times n$ is the image resolution.
 
-\section{Expected RMSE Values}
+\section{Validation Criterion}
 
-Ideally, all parallel implementations should produce pixel-perfect results (RMSE = 0) as they perform the same floating-point operations. However, due to:
+Ideally, all parallel implementations should produce pixel-perfect results (RMSE = 0) because each output pixel applies the same kernels. Small differences may occur due to:
 
 \begin{itemize}
     \item \textbf{Floating-point rounding}: Order of operations may differ between serial and parallel code
@@ -488,26 +511,39 @@ Ideally, all parallel implementations should produce pixel-perfect results (RMSE
 
 Acceptable RMSE threshold: $\text{RMSE} < 0.5$ (less than half a pixel value difference on average)
 
-\section{Results Table}
+\section{Recorded Accuracy Results}
+
+The $1024 \times 1024$ output images were regenerated after rebuilding the corrected MPI
+and Hybrid programs in Ubuntu WSL. The C++ OpenCV comparison utility in the
+\texttt{benchmark} directory was run against the serial baseline; all validated CPU
+implementations produced identical images.
 
 \begin{table}[H]
     \centering
-    \begin{tabular}{|l|c|c|}
+    \begin{tabular}{|l|c|c|c|}
     \hline
-    \textbf{Implementation} & \textbf{Threads/Processes} & \textbf{Expected RMSE} \\
+    \textbf{Implementation} & \textbf{Denoised RMSE} & \textbf{Edges RMSE} & \textbf{Status} \\
     \hline
-    Serial & 1 & 0.0 (baseline) \\
-    OpenMP & 1--16 & < 0.1 \\
-    Pthreads & 1--16 & < 0.1 \\
-    MPI & 1--8 & < 0.1 \\
-    Hybrid (MPI+OMP) & Various & < 0.1 \\
-    CUDA & 1024+ threads & < 1.0 (GPU rounding) \\
+    Serial & 0.0000 & 0.0000 & Baseline \\
+    OpenMP & 0.0000 & 0.0000 & PASS \\
+    Pthreads & 0.0000 & 0.0000 & PASS \\
+    MPI  & 0.0000 & 0.0000 & PASS \\
+    Hybrid  & 0.0000 & 0.0000 & PASS \\
+    CUDA (supplied timing only) & -- & -- & Not verified \\
     \hline
     \end{tabular}
-    \caption{Expected RMSE Values Across Implementations}
+    \caption{Measured RMSE Against Serial Baseline for Regenerated Output Images}
 \end{table}
 
-The goal is to confirm that all parallel implementations produce visually identical results to the serial baseline, validating correctness before performance analysis.
+The earlier MPI and Hybrid discrepancy was caused by splitting rows without supplying
+neighbouring data between process partitions. The corrected implementations compute assigned
+global rows from a complete broadcast input and assemble the full denoised image before
+Sobel processing. After rebuilding and rerunning, both distributed implementations record
+RMSE 0.0000 and pass validation.
+
+CUDA timing values were supplied for performance reporting, but matching $1024 \times 1024$
+CUDA denoised and edge-output images were not available for RMSE verification. CUDA accuracy
+is therefore not asserted in Table 4.1.
 
 \newpage
 
@@ -604,219 +640,279 @@ cout << "Execution time: " << elapsed << " ms\n";
 % Chapter 6: Results and Discussion
 \chapter{Results and Discussion}
 
+\section{Measurement Basis}
+
+The timing tables in this chapter are derived from the two saved benchmark CSV files.
+The shared-memory CSV contains the existing process wall-clock observations. The refreshed
+MPI/Hybrid CSV was generated in Ubuntu WSL after rebuilding the corrected distributed
+executables and measures complete \texttt{mpirun} invocation wall-clock duration. In contrast,
+the web application displays processing time reported inside each executable for a fresh run.
+Consequently, live application values are not expected to equal aggregate wall-clock values
+in this report.
+
+Trial 0 was treated as an initialization/warm-up run because the recorded serial value
+(143.52 ms) is an outlier relative to subsequent serial measurements (7.42--8.02 ms).
+Reported shared-memory averages therefore use trials 1--4, while refreshed MPI and Hybrid
+averages use trials 1--2. The refreshed MPI/Hybrid CSV now contains 12 MPI timing rows and
+15 Hybrid timing rows.
+
+CUDA measurements were supplied separately from a Google Colab run using a $512 \times 512$
+pixel image. The requested CUDA comparison uses the existing warmed serial mean of 7.70 ms
+as a reference and reports an indicative ratio of $7.70 / 0.370 = 20.81\times$ for the
+fastest CUDA setting. This is not a strict like-for-like speedup because the CPU, refreshed
+WSL MPI/Hybrid, and CUDA measurements were recorded in different execution contexts; CUDA
+also uses a $512 \times 512$ rather than $1024 \times 1024$ input image.
+
 \section{Execution Time Measurements}
 
-The following table summarizes execution times across different implementations with varying thread/process counts:
+\begin{table}[H]
+    \centering
+    \scriptsize
+    \begin{tabular}{|l|c|c|r|r|r|}
+    \hline
+    \textbf{Implementation} & \textbf{Configuration} & \textbf{Image} & \textbf{Time (ms)} & \textbf{Speedup} & \textbf{Efficiency} \\
+    \hline
+    Serial & 1 thread & $1024 \times 1024$ & 7.70 & 1.00$\times$ & 100.0\% \\
+    \hline
+    OpenMP & 1 thread & $1024 \times 1024$ & 7.46 & 1.03$\times$ & 103.2\% \\
+    OpenMP & 2 threads & $1024 \times 1024$ & 7.74 & 1.00$\times$ & 49.8\% \\
+    OpenMP & 4 threads & $1024 \times 1024$ & 8.38 & 0.92$\times$ & 23.0\% \\
+    OpenMP & 8 threads & $1024 \times 1024$ & 7.77 & 0.99$\times$ & 12.4\% \\
+    OpenMP & 16 threads & $1024 \times 1024$ & 7.49 & 1.03$\times$ & 6.4\% \\
+    \hline
+    Pthreads & 1 thread & $1024 \times 1024$ & 8.05 & 0.96$\times$ & 95.7\% \\
+    Pthreads & 2 threads & $1024 \times 1024$ & 7.48 & 1.03$\times$ & 51.5\% \\
+    Pthreads & 4 threads & $1024 \times 1024$ & 7.32 & 1.05$\times$ & 26.3\% \\
+    Pthreads & 8 threads & $1024 \times 1024$ & 7.43 & 1.04$\times$ & 13.0\% \\
+    Pthreads & 16 threads & $1024 \times 1024$ & 7.17 & 1.07$\times$ & 6.7\% \\
+    \hline
+    CUDA* & $8 \times 8$ block & $1024 \times 1024$ & 0.370 & 20.81$\times$ & -- \\
+    \hline
+    \end{tabular}
+    \caption{Reported Execution Times and Indicative CUDA Comparison}
+\end{table}
+
+\begin{table}[H]
+    \centering
+    \scriptsize
+    \begin{tabular}{|l|c|r|r|}
+    \hline
+    \textbf{Implementation} & \textbf{Configuration} & \textbf{Avg. Time (ms)} & \textbf{Indicative Ratio vs. Serial} \\
+    \hline
+    MPI & 1 process & 595.74 & 0.013$\times$ \\
+    MPI & 2 processes & 598.34 & 0.013$\times$ \\
+    MPI & 4 processes & 619.46 & 0.012$\times$ \\
+    MPI & 8 processes & 628.70 & 0.012$\times$ \\
+    \hline
+    Hybrid & 1 process $\times$ 1 thread & 594.83 & 0.013$\times$ \\
+    Hybrid & 2 processes $\times$ 2 threads & 608.88 & 0.013$\times$ \\
+    Hybrid & 2 processes $\times$ 4 threads & 586.74 & 0.013$\times$ \\
+    Hybrid & 4 processes $\times$ 2 threads & 595.94 & 0.013$\times$ \\
+    Hybrid & 4 processes $\times$ 4 threads & 616.16 & 0.012$\times$ \\
+    \hline
+    \end{tabular}
+    \caption{Refreshed WSL MPI/Hybrid Wall-Clock Averages after Excluding Trial 0 Warm-Up}
+\end{table}
+
+\subsection{CUDA Block-Size Results}
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{|c|r|r|r|}
+    \hline
+    \textbf{Block Size} & \textbf{Threads/Block} & \textbf{Grid Blocks} & \textbf{Time (ms)} \\
+    \hline
+    $8 \times 8$ & 64 & 4096 & 0.370 \\
+    $16 \times 16$ & 256 & 1024 & 0.387 \\
+    $32 \times 32$ & 1024 & 256 & 0.391 \\
+    \hline
+    \end{tabular}
+    \caption{CUDA Block-Size Timing Results for a $512 \times 512$ Pixel Image in Google Colab}
+\end{table}
+
+The fastest recorded CUDA block configuration is $8 \times 8$, using 64 threads per block
+and 4096 grid blocks, with an execution time of 0.370 ms. These timings identify the best
+CUDA block size in the supplied experiment. Compared against the existing 7.70 ms serial
+reference, its indicative ratio is 20.81$\times$; this must be interpreted with caution
+because the input resolution and measurement source differ.
+
+\section{Speedup Analysis}
+
+For the recorded wall-clock dataset, speedup is computed from the warmed serial mean:
+
+\begin{equation}
+S_p = \frac{T_{serial}}{T_p} = \frac{7.70 \text{ ms}}{T_p}
+\end{equation}
+
+For the separately supplied CUDA measurement, the requested indicative comparison is:
+
+\begin{equation}
+S_{\text{CUDA, indicative}} = \frac{7.70 \text{ ms}}{0.370 \text{ ms}} = 20.81\times
+\end{equation}
 
 \begin{table}[H]
     \centering
     \footnotesize
-    \setlength{\tabcolsep}{3pt}
-    \begin{tabular}{|l|c|c|c|c|c|l|}
+    \begin{tabular}{|l|c|c|r|r|}
     \hline
-    \textbf{Impl.} & \textbf{1T} & \textbf{2T} & \textbf{4T} & \textbf{8T} & \textbf{16T} & \textbf{Notes} \\
+    \textbf{Implementation} & \textbf{Fastest Configuration} & \textbf{Image} & \textbf{Time (ms)} & \textbf{Ratio vs. Serial} \\
     \hline
-    Serial & 34.9 & --- & --- & --- & --- & Baseline \\
-    \hline
-    OpenMP & 7.5 & 7.7 & 8.7 & 7.7 & 7.4 & Shared-mem \\
-    Pthreads & 8.0 & 7.5 & 7.3 & 7.4 & 7.2 & Explicit sync \\
-    \hline
-    MPI (1) & 165.0 & --- & --- & --- & --- & Dist-mem \\
-    MPI (2) & --- & 95.0 & --- & --- & --- & Message-pass \\
-    MPI (4) & --- & --- & 58.0 & --- & --- & High latency \\
-    MPI (8) & --- & --- & --- & 42.0 & --- & Scaling $\downarrow$ \\
-    \hline
-    Hybrid 1×1 & 192.5 & --- & --- & --- & --- & 1P×1T \\
-    Hybrid 2×2 & --- & 179.2 & --- & --- & --- & 2P×2T \\
-    Hybrid 4×4 & --- & --- & 169.0 & --- & --- & 4P×4T \\
-    Hybrid 2×4 & --- & 170.7 & --- & --- & --- & 2P×4T \\
-    Hybrid 4×2 & --- & --- & 170.6 & --- & --- & 4P×2T \\
+    Serial & 1 thread & $1024 \times 1024$ & 7.70 & 1.00$\times$ \\
+    OpenMP & 1 thread & $1024 \times 1024$ & 7.46 & 1.03$\times$ \\
+    Pthreads & 16 threads & $1024 \times 1024$ & 7.17 & 1.07$\times$ \\
+    MPI & 1 process & $1024 \times 1024$ & 595.74 & 0.013$\times$ \\
+    Hybrid & 2 processes $\times$ 4 threads & $1024 \times 1024$ & 586.74 & 0.013$\times$ \\
+    CUDA & $8 \times 8$ block & $512 \times 512$ & 0.370 & 20.81$\times$ \\
     \hline
     \end{tabular}
-    \caption{Execution Times (ms) -- $1024 \times 1024$ pixels. Shared-memory (OpenMP, Pthreads) measured; MPI/Hybrid measured where possible, estimated otherwise.}
+    \caption{Fastest Reported Configurations}
 \end{table}
-
-\section{Speedup Analysis}
 
 \begin{figure}[H]
     \centering
-    \begin{tikzpicture}
-        \begin{axis}[
-            xlabel=Number of Threads,
-            ylabel=Speedup,
-            legend pos=north west,
-            grid style=dashed,
-            width=10cm,
-            height=6cm,
-            xtick={1,2,4,8,16},
-            x label style={at={(axis description cs: 0.5,-0.15)}, anchor=north},
-            y label style={at={(axis description cs: -0.1, 0.5)}, anchor=south}
-        ]
-        
-        % Ideal linear speedup
-        \addplot[dashed, black, thick] coordinates {
-            (1, 1) (2, 2) (4, 4) (8, 8) (16, 16)
-        };
-        \addlegendentry{Ideal (Linear)};
-        
-        % OpenMP
-        \addplot[solid, blue, thick, mark=o] coordinates {
-            (1, 4.63) (2, 4.54) (4, 4.03) (8, 4.52) (16, 4.70)
-        };
-        \addlegendentry{OpenMP};
-        
-        % Pthreads
-        \addplot[solid, green, thick, mark=square] coordinates {
-            (1, 4.38) (2, 4.64) (4, 4.74) (8, 4.74) (16, 4.85)
-        };
-        \addlegendentry{Pthreads};
-        
-        % MPI (estimated)
-        \addplot[solid, red, thick, mark=triangle] coordinates {
-            (1, 0.21) (2, 0.37) (4, 0.60) (8, 0.83)
-        };
-        \addlegendentry{MPI (est.)};
-        
-        % Hybrid (note: higher overhead visible)
-        \addplot[solid, orange, thick, mark=diamond] coordinates {
-            (1, 0.18) (2, 0.19) (4, 0.21)
-        };
-        \addlegendentry{Hybrid};
-        
-        \end{axis}
-    \end{tikzpicture}
-    \caption{Measured Speedup vs. Number of Threads (1024×1024 pixels)}
+    \begin{minipage}{0.31\textwidth}
+        \centering
+        \begin{tikzpicture}
+            \begin{axis}[
+                title={},
+                title style={font=\scriptsize},
+                ylabel={Ratio ($\times$)},
+                ybar,
+                bar width=10pt,
+                symbolic x coords={Serial,OpenMP,Pthreads},
+                xtick=data,
+                xticklabel style={font=\scriptsize, rotate=35, anchor=east},
+                tick label style={font=\scriptsize},
+                ymin=0,
+                ymax=1.18,
+                ytick={0,0.5,1.0},
+                nodes near coords,
+                every node near coord/.append style={font=\scriptsize},
+                grid=major,
+                grid style=dashed,
+                width=0.96\linewidth,
+                height=5cm
+            ]
+            \addplot[fill=gray!60, draw=black] coordinates {
+                (Serial,1.00)
+                (OpenMP,1.03)
+                (Pthreads,1.07)
+            };
+            \end{axis}
+        \end{tikzpicture}
+    \end{minipage}\hfill
+    \begin{minipage}{0.31\textwidth}
+        \centering
+        \begin{tikzpicture}
+            \begin{axis}[
+                title={},
+                title style={font=\scriptsize},
+                ybar,
+                bar width=13pt,
+                symbolic x coords={MPI,Hybrid},
+                xtick=data,
+                xticklabel style={font=\scriptsize, rotate=35, anchor=east},
+                tick label style={font=\scriptsize},
+                ymin=0,
+                ymax=0.015,
+                ytick={0,0.005,0.010},
+                scaled y ticks=false,
+                yticklabel style={
+                    /pgf/number format/fixed,
+                    /pgf/number format/precision=3,
+                    font=\scriptsize
+                },
+                nodes near coords={\pgfmathprintnumber[fixed,precision=3]{\pgfplotspointmeta}},
+                every node near coord/.append style={font=\scriptsize},
+                grid=major,
+                grid style=dashed,
+                width=0.96\linewidth,
+                height=5cm
+            ]
+            \addplot[fill=gray!60, draw=black] coordinates {
+                (MPI,0.013)
+                (Hybrid,0.013)
+            };
+            \end{axis}
+        \end{tikzpicture}
+    \end{minipage}\hfill
+    \begin{minipage}{0.31\textwidth}
+        \centering
+        \begin{tikzpicture}
+            \begin{axis}[
+                title={},
+                title style={font=\scriptsize},
+                ybar,
+                bar width=18pt,
+                xmin=0.5,
+                xmax=1.5,
+                xtick={1},
+                xticklabels={CUDA},
+                xticklabel style={font=\scriptsize},
+                tick label style={font=\scriptsize},
+                ymin=0,
+                ymax=23,
+                ytick={0,10,20},
+                nodes near coords,
+                every node near coord/.append style={font=\scriptsize},
+                grid=major,
+                grid style=dashed,
+                width=0.96\linewidth,
+                height=5cm
+            ]
+            \addplot[fill=gray!60, draw=black] coordinates {
+                (1,20.81)
+            };
+            \end{axis}
+        \end{tikzpicture}
+    \end{minipage}
+    \caption{Reported Ratios Shown on Separate Scales}
 \end{figure}
 
-\subsection{Key Observations}
-
-\begin{enumerate}
-    \item \textbf{Consistent Speedup Plateau}: Both OpenMP and Pthreads show a speedup plateau around 4.5--4.85×, independent of thread count. This indicates:
-    \begin{itemize}
-        \item Processing time dominated by algorithm complexity (Gaussian blur + Sobel operator)
-        \item Parallelization overhead becomes significant with more threads
-        \item Memory bandwidth limitations for the small 1024×1024 image
-        \item Limited scalability beyond shared-memory benefits
-    \end{itemize}
-    
-    \item \textbf{OpenMP Performance}: Achieves 4.63--4.70× speedup across all thread counts with minimal variance. This is attributed to:
-    \begin{itemize}
-        \item Efficient compiler-level parallelization
-        \item Low synchronization overhead
-        \item Optimal cache utilization with shared memory
-        \item Static work distribution schedule
-    \end{itemize}
-    
-    \item \textbf{Pthreads Scalability}: Slightly higher maximum speedup (4.85× with 16 threads) due to:
-    \begin{itemize}
-        \item Fine-grained thread control allowing better load balancing
-        \item Explicit synchronization allows overlap of computation and communication
-        \item Higher implementation complexity but better potential for optimization
-    \end{itemize}
-    
-    \item \textbf{Amdahl's Law Verification}: The plateau at ~4.8× speedup can be explained by:
-    \begin{itemize}
-        \item Serial fraction $f \approx 0.19$ (19\% of code is inherently serial)
-        \item Theoretical maximum speedup: $S_\infty = \frac{1}{f} \approx 5.3$
-        \item Measured speedup approaches this limit, validating theoretical predictions
-    \end{itemize}
-    
-    \item \textbf{Problem Size Effect}: The 1024×1024 image is relatively small. Larger problem sizes (e.g., 2048×2048 or greater) would likely show:
-    \begin{itemize}
-        \item Better scalability with more threads
-        \item Reduced parallelization overhead ratio
-        \item Closer approach to linear speedup curves
-    \end{itemize}
-    
-    \item \textbf{MPI Performance Limitations}: MPI exhibits sublinear speedup (0.21--0.83× across 1--8 processes) because:
-    \begin{itemize}
-        \item Distributed-memory communication overhead (scatter/gather) exceeds computation
-        \item MPI is designed for multi-node clusters or large-scale problems
-        \item Single-machine MPI incurs context-switching and serialization costs
-        \item Efficiency drops to 10.4\% with 8 processes (vs 30\% for shared-memory)
-        \item MPI becomes viable when computation-to-communication ratio improves (larger problems or distributed systems)
-    \end{itemize}
-    
-    \item \textbf{Hybrid MPI+OpenMP Overhead}: The Hybrid implementation shows significant overhead (0.18--0.21× relative to serial), with execution times of 170--192 ms. This demonstrates:
-    \begin{itemize}
-        \item MPI initialization and inter-process communication overhead dominates for small problems
-        \item Hybrid approach is suited for distributed systems with many nodes, not single-machine parallelism
-        \item The 1024×1024 image problem size is too small to justify MPI overhead
-        \item Shared-memory approaches (OpenMP, Pthreads) are far superior for this workload
-        \item For effective Hybrid scaling, use significantly larger datasets (e.g., 4096×4096 images or batch processing)
-    \end{itemize}
-\end{enumerate}
-
-\section{Efficiency Analysis}
-
-\begin{table}[H]
-    \centering
-    \begin{tabular}{|l|r|r|r|}
-    \hline
-    \textbf{Implementation} & \textbf{Max Threads/Procs} & \textbf{Speedup} & \textbf{Efficiency} \\
-    \hline
-    OpenMP & 16 & 4.70× & 29.4\% \\
-    Pthreads & 16 & 4.85× & 30.3\% \\
-    MPI (est.) & 8 & 0.83× & 10.4\% \\
-    Hybrid & 16 (4P×4T) & 0.21× & 1.3\% \\
-    \hline
-    \end{tabular}
-    \caption{Efficiency Metrics -- Speedup and Resource Utilization}
-\end{table}
-
-The efficiency degradation with increasing threads reflects:
-\begin{itemize}
-    \item Synchronization overhead grows with thread count
-    \item Cache contention and memory bandwidth saturation
-    \item Load imbalance (remainder rows in uneven divisions)
-    \item Diminishing returns beyond optimal thread count (likely 8 for this hardware)
-\end{itemize}
+The recorded shared-memory values are clustered around the serial baseline; they do not
+demonstrate substantial speedup for this dataset under whole-process timing. Pthreads at
+16 threads has the lowest recorded mean (7.17 ms), but its advantage over serial is only
+1.07$\times$. The refreshed MPI/Hybrid measurements are dominated by complete
+\texttt{mpirun} launch and communication overhead: MPI's fastest recorded mean is
+595.74 ms at one process, while Hybrid's is 586.74 ms at two processes and four threads.
+Ratios against the existing serial CSV are indicative because the distributed benchmark was
+rerun in WSL. The CUDA ratio of 20.81$\times$ is also indicative rather than a controlled
+speedup result.
 
 \section{Accuracy Verification Results}
 
-All parallel implementations successfully validated against serial baseline:
+Accuracy validation was rerun after rebuilding the corrected MPI and Hybrid programs and
+regenerating output images for the same $1024 \times 1024$ input. OpenMP, Pthreads, MPI,
+and Hybrid all match the serial baseline exactly.
 
 \begin{table}[H]
     \centering
-    \begin{tabular}{|l|c|c|}
+    \begin{tabular}{|l|r|r|l|}
     \hline
-    \textbf{Implementation} & \textbf{Max RMSE} & \textbf{Status} \\
+    \textbf{Implementation} & \textbf{Denoised RMSE} & \textbf{Edges RMSE} & \textbf{Status} \\
     \hline
-    OpenMP (all configs) & 0.0045 & PASS \\
-    Pthreads (all configs) & 0.0031 & PASS \\
-    MPI (all configs) & 0.0089 & PASS \\
-    Hybrid (all configs) & 0.0067 & PASS \\
+    OpenMP & 0.0000 & 0.0000 & PASS \\
+    Pthreads & 0.0000 & 0.0000 & PASS \\
+    MPI & 0.0000 & 0.0000 & PASS \\
+    Hybrid & 0.0000 & 0.0000 & PASS \\
     \hline
     \end{tabular}
-    \caption{RMSE Verification: All Implementations Accurate}
+    \caption{Measured Accuracy of Regenerated Output Images}
 \end{table}
 
-RMSE values significantly below the 0.5 threshold confirm numerical correctness across all implementations.
+\section{Scalability and Optimal Configuration}
 
-\section{Scalability Insights}
-
-\subsection{Strong Scaling (Fixed Problem Size)}
-
-As threads increase for a fixed $1024 \times 1024$ image:
-
-\begin{equation}
-\text{Speedup}(p) = \frac{150.2}{T_p}
-\end{equation}
-
-- OpenMP scales nearly linearly up to $p=8$, then sublinear
-- Pthreads shows similar pattern but with steeper degradation after $p=8$
-- MPI shows consistent sublinearity due to communication overhead
-
-\subsection{Optimal Thread Count}
-
-For the tested hardware (8-core CPU):
 \begin{itemize}
-    \item \textbf{Optimal for OpenMP}: 8 threads (speedup: 6.88×)
-    \item \textbf{Optimal for Pthreads}: 8 threads (speedup: 6.50×)
-    \item \textbf{Optimal for MPI}: 4 processes (speedup: 2.58×)
+    \item \textbf{OpenMP}: The fastest recorded setting is 1 thread at 7.46 ms; additional threads do not improve wall-clock time in this dataset.
+    \item \textbf{Pthreads}: The fastest recorded setting is 16 threads at 7.17 ms, providing a modest 1.07$\times$ speedup over the serial mean.
+    \item \textbf{MPI}: The fastest refreshed wall-clock setting is 1 process at 595.74 ms; added processes do not offset launch and communication overhead for this input.
+    \item \textbf{Hybrid}: The fastest refreshed wall-clock setting is 2 processes $\times$ 4 threads at 586.74 ms; it remains dominated by MPI launch overhead.
+    \item \textbf{CUDA}: In the supplied $512 \times 512$ Colab experiment, the fastest block size is $8 \times 8$ at 0.370 ms; against the existing serial reference this is an indicative 20.81$\times$ ratio.
 \end{itemize}
 
-Beyond these points, overhead increases faster than performance gains decrease (negative scaling efficiency).
+The refreshed MPI and Hybrid timing records correspond to implementations that pass output
+validation. Their comparison with the older shared-memory timing CSV remains contextual
+rather than a controlled same-environment speedup experiment.
 
 \newpage
 
@@ -828,27 +924,27 @@ Beyond these points, overhead increases faster than performance gains decrease (
 This project successfully demonstrates the practical application of parallel programming paradigms to image processing. Key findings:
 
 \begin{enumerate}
-    \item \textbf{OpenMP is the Winner for Shared-Memory}: Achieving 11.13× speedup with 16 threads on an 8-core system shows OpenMP's efficiency. The advantage comes from minimal overhead and intelligent compiler optimizations.
+    \item \textbf{Pthreads Has the Lowest Recorded CPU Mean}: In the available wall-clock benchmark data, Pthreads at 16 threads achieved 7.17 ms, a modest 1.07$\times$ speedup over the warmed serial baseline.
     
-    \item \textbf{Pthreads Trade Simplicity for Performance}: While offering more control, Pthreads comes with higher implementation complexity and ~10\% lower efficiency than OpenMP.
+    \item \textbf{OpenMP Remains Simple but Does Not Scale in This Record}: Its fastest recorded average is 7.46 ms at 1 thread; additional threads did not reduce wall-clock time for this workload.
     
-    \item \textbf{MPI Unsuitable for Shared-Memory Systems}: Inter-process communication overhead outweighs parallelism benefits on single machines. MPI excels in distributed systems where communication latency is amortized over larger workloads.
+    \item \textbf{MPI Results Are Now Recorded}: The rebuilt MPI implementation was measured at 1, 2, 4, and 8 processes; the lowest refreshed wall-clock mean is 595.74 ms at one process.
     
-    \item \textbf{Hybrid Approach Offers Flexibility}: Combining MPI and OpenMP provides a middle ground, useful in heterogeneous HPC clusters with multiple nodes.
+    \item \textbf{Hybrid Overhead Dominates the Refreshed Distributed Benchmark}: Its fastest refreshed wall-clock mean is 586.74 ms at 2 processes $\times$ 4 threads.
     
-    \item \textbf{GPU Acceleration (CUDA)}: Separate evaluation on Google Colab would show dramatic speedups (100-1000×) due to massive parallelism, but with memory transfer overhead considerations.
+    \item \textbf{CUDA Block-Size Result}: In the supplied $512 \times 512$ Google Colab experiment, the $8 \times 8$ block configuration was fastest at 0.370 ms. Using the existing serial mean as requested gives an indicative 20.81$\times$ ratio, not a controlled CPU-to-GPU speedup, because input size and timing source differ.
     
-    \item \textbf{Correctness is Essential}: All implementations must be validated against serial baseline (RMSE < 0.5). Our implementations all achieve RMSE < 0.01, confirming correctness.
+    \item \textbf{Correctness Validation Confirmed the Fix}: After rebuilding and rerunning, OpenMP, Pthreads, MPI, and Hybrid each pass with denoised and edge-output RMSE 0.0000.
 \end{enumerate}
 
 \section{Practical Recommendations}
 
 \subsection{For Image Processing Applications}
 \begin{itemize}
-    \item Use \textbf{OpenMP} for single-machine multi-core processing (simplest, best performance)
-    \item Use \textbf{CUDA/GPU} for large-scale or real-time image processing (100-1000× speedup)
-    \item Use \textbf{Pthreads} only if fine-grained control over thread lifecycle is required
-    \item Avoid \textbf{MPI} on shared-memory systems; reserve for multi-node clusters
+    \item Prefer \textbf{OpenMP} when maintainability and simple shared-memory parallelization are priorities.
+    \item Consider \textbf{Pthreads} when explicit thread control is justified; it recorded the lowest CPU mean in this dataset.
+    \item Use \textbf{MPI and Hybrid} results as correctness-validated distributed measurements, and repeat all paradigms in one environment before making formal speedup comparisons.
+    \item Use \textbf{CUDA/GPU} with the measured $8 \times 8$ block configuration for the supplied $512 \times 512$ case; run matched-size CPU and CUDA tests before claiming a GPU speedup.
 \end{itemize}
 
 \subsection{For Future Optimization}
@@ -868,32 +964,34 @@ Amdahl's law predicts:
 S_{\max} = \frac{1}{0 + \frac{1}{p}} = p \quad (\text{ideal linear speedup})
 \end{equation}
 
-However, practical results show:
+However, practical results show lower speedup because of thread/process overhead, memory bandwidth limits, synchronization, and communication costs:
 
 \begin{table}[H]
     \centering
+    \footnotesize
     \begin{tabular}{|l|r|r|r|}
     \hline
-    \textbf{Threads} & \textbf{Theoretical Max} & \textbf{OpenMP Actual} & \textbf{Efficiency} \\
+    \textbf{Implementation} & \textbf{Configuration} & \textbf{Image} & \textbf{Speedup} \\
     \hline
-    1 & 1.0 & 1.0 & 100\% \\
-    2 & 2.0 & 1.99 & 99.5\% \\
-    4 & 4.0 & 3.80 & 95.0\% \\
-    8 & 8.0 & 6.88 & 86.0\% \\
-    16 & 16.0 & 11.13 & 69.6\% \\
+    Serial & 1 thread & $1024 \times 1024$ & 1.00$\times$ \\
+    OpenMP & 1 thread & $1024 \times 1024$ & 1.03$\times$ \\
+    Pthreads & 16 threads & $1024 \times 1024$ & 1.07$\times$ \\
+    MPI & 1 process & $1024 \times 1024$ & 0.013$\times$ \\
+    Hybrid & 2 processes $\times$ 4 threads & $1024 \times 1024$ & 0.013$\times$ \\
+    CUDA & $8 \times 8$ block & $512 \times 512$ & 20.81$\times$ \\
     \hline
     \end{tabular}
-    \caption{Theoretical vs. Actual Speedup}
+    \caption{Reported Ratios to Serial Baseline}
 \end{table}
 
-The gap between theoretical and practical speedup reveals overhead sources (synchronization, memory contention, cache effects).
+The gap between theoretical and measured speedup reveals practical overhead sources: synchronization, memory contention, cache effects, MPI startup, and data movement. The CUDA value should be replaced by a matched-input result if it is used for a formal CPU-to-GPU performance claim.
 
 \section{Learning Outcomes}
 
 Through this project, the team gained proficiency in:
 
 \begin{enumerate}
-    \item \textbf{Parallel Programming Models}: Understanding strengths/weaknesses of OpenMP, Pthreads, MPI
+    \item \textbf{Parallel Programming Models}: Comparing OpenMP, Pthreads, and MPI trade-offs
     \item \textbf{Performance Analysis}: Measuring, analyzing, and optimizing parallel algorithms
     \item \textbf{Software Engineering}: Implementing correct, efficient, maintainable parallel code
     \item \textbf{Hardware-Software Interaction}: How CPU caches, memory bandwidth, and core counts affect performance
@@ -903,7 +1001,7 @@ Through this project, the team gained proficiency in:
 
 \section{Final Conclusion}
 
-This project successfully demonstrates that careful parallel programming can yield substantial performance improvements for data-parallel workloads. The choice of parallel paradigm should match the target hardware and scalability requirements. For modern multi-core CPUs with shared memory, OpenMP provides the best balance of performance and simplicity. For distributed systems and extreme-scale computing, MPI becomes the appropriate choice. GPU acceleration (CUDA) remains the gold standard for compute-intensive tasks when memory bandwidth is not the bottleneck.
+This project demonstrates both the promise and the verification requirements of parallel image processing. In the recorded shared-memory data, Pthreads has the lowest mean at 7.17 ms. The rebuilt MPI and Hybrid implementations have now been rerun in Ubuntu WSL and verified as pixel-identical to serial; their fastest refreshed wall-clock means are 595.74 ms and 586.74 ms respectively, reflecting substantial complete-launch overhead for this input. The supplied CUDA experiment identifies $8 \times 8$ as the fastest block size for a $512 \times 512$ input at 0.370 ms; comparison against the existing serial mean gives an indicative ratio of 20.81$\times$. Future work should repeat all implementations on matched inputs with one timing method and execution environment for formal speedup conclusions.
 
 \newpage
 

@@ -15,6 +15,52 @@ export default function App() {
   const [allResults, setAllResults] = useState([]);
   const [serialTime, setSerialTime] = useState(null);
 
+  const formatNumber = (value, digits = 2) => (
+    typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : 'N/A'
+  );
+
+  const getConfigLabel = (res) => {
+    if (!res) return 'N/A';
+
+    if (res.method === 'serial') return '1 thread';
+    if (res.method === 'mpi') return `${res.processes || 1} process${(res.processes || 1) === 1 ? '' : 'es'}`;
+    if (res.method === 'hybrid') {
+      const processCount = res.processes || 1;
+      const threadCount = res.threads || 1;
+      return `${processCount}P x ${threadCount}T`;
+    }
+
+    return `${res.threads || 1} thread${(res.threads || 1) === 1 ? '' : 's'}`;
+  };
+
+  const getSerialBaseline = (results) => (
+    results.find((res) => res.method === 'serial')?.executionTime || null
+  );
+
+  const getSpeedup = (res, baseline) => {
+    if (!res?.executionTime || !baseline) return null;
+    return baseline / res.executionTime;
+  };
+
+  const comparisonBaseline = getSerialBaseline(allResults);
+  const comparisonRows = allResults.map((res) => ({
+    ...res,
+    configLabel: getConfigLabel(res),
+    speedup: getSpeedup(res, comparisonBaseline)
+  }));
+  const fastestResult = comparisonRows.reduce((best, res) => {
+    if (!res.executionTime) return best;
+    if (!best || res.executionTime < best.executionTime) return res;
+    return best;
+  }, null);
+  const fastestParallelResult = comparisonRows
+    .filter((res) => res.method !== 'serial')
+    .reduce((best, res) => {
+      if (!res.executionTime) return best;
+      if (!best || res.executionTime < best.executionTime) return res;
+      return best;
+    }, null);
+
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -81,14 +127,14 @@ export default function App() {
     setError('');
     const results = [];
 
-    const methods = ['serial', 'openmp', 'pthreads', 'mpi', 'hybrid', 'cuda'];
+    const methods = ['serial', 'openmp', 'pthreads', 'mpi', 'hybrid'];
     for (const m of methods) {
       try {
         const response = await processImage({
           file: selectedFile,
           method: m,
           threads: m === 'serial' ? 1 : parseInt(threads),
-          processes: 1,
+          processes: ['mpi', 'hybrid'].includes(m) ? parseInt(processes) : 1,
           blockSize: parseInt(blockSize)
         });
         results.push(response);
@@ -153,7 +199,6 @@ export default function App() {
               <option value="pthreads">Pthreads</option>
               <option value="mpi">MPI</option>
               <option value="hybrid">Hybrid (OpenMP + MPI)</option>
-              <option value="cuda">CUDA (GPU)</option>
             </select>
           </div>
 
@@ -237,16 +282,20 @@ export default function App() {
               <div className="result-metrics">
                 <div className="metric">
                   <span className="metric-label">Execution Time</span>
-                  <span className="metric-value">{result.executionTime?.toFixed(2)} ms</span>
+                  <span className="metric-value">{formatNumber(result.executionTime)} ms</span>
+                </div>
+                <div className="metric">
+                  <span className="metric-label">Configuration</span>
+                  <span className="metric-value">{getConfigLabel(result)}</span>
                 </div>
                 <div className="metric">
                   <span className="metric-label">RMSE</span>
-                  <span className="metric-value">{result.rmse !== null ? result.rmse.toFixed(4) : 'N/A'}</span>
+                  <span className="metric-value">{formatNumber(result.rmse, 4)}</span>
                 </div>
                 {serialTime && result.method !== 'serial' && (
                   <div className="metric">
                     <span className="metric-label">Speedup</span>
-                    <span className="metric-value">{(serialTime / result.executionTime).toFixed(2)}x</span>
+                    <span className="metric-value">{formatNumber(getSpeedup(result, serialTime))}x</span>
                   </div>
                 )}
               </div>
@@ -274,44 +323,59 @@ export default function App() {
       {allResults.length > 0 && (
         <div className="comparison-section">
           <h2>Comparison Table</h2>
+          {fastestResult && (
+            <div className="optimal-summary">
+              <div>
+                <span className="summary-label">Fastest result</span>
+                <strong>{fastestResult.method.toUpperCase()} ({fastestResult.configLabel})</strong>
+                <span>{formatNumber(fastestResult.executionTime)} ms</span>
+              </div>
+              {fastestParallelResult && (
+                <div>
+                  <span className="summary-label">Best parallel speedup</span>
+                  <strong>{fastestParallelResult.method.toUpperCase()} ({fastestParallelResult.configLabel})</strong>
+                  <span>{formatNumber(fastestParallelResult.speedup)}x</span>
+                </div>
+              )}
+            </div>
+          )}
           <div className="comparison-table">
             <table>
               <thead>
                 <tr>
                   <th>Method</th>
+                  <th>Configuration</th>
                   <th>Execution Time (ms)</th>
                   <th>RMSE</th>
                   <th>Speedup</th>
                 </tr>
               </thead>
               <tbody>
-                {allResults.map((res, idx) => {
-                  const serialTime = allResults[0]?.executionTime || 1;
-                  const speedup = (serialTime / (res.executionTime || 1)).toFixed(2);
-                  return (
-                    <tr key={idx}>
-                      <td className="method-col">{res.method}</td>
-                      <td>{res.executionTime?.toFixed(2)}</td>
-                      <td>{res.rmse !== null && res.rmse !== undefined ? res.rmse.toFixed(4) : 'N/A'}</td>
-                      <td className="speedup-col">{speedup}x</td>
-                    </tr>
-                  );
-                })}
+                {comparisonRows.map((res, idx) => (
+                  <tr key={idx}>
+                    <td className="method-col">{res.method}</td>
+                    <td>{res.configLabel}</td>
+                    <td>{formatNumber(res.executionTime)}</td>
+                    <td>{formatNumber(res.rmse, 4)}</td>
+                    <td className="speedup-col">{formatNumber(res.speedup)}x</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
 
           <h2>Detailed Results</h2>
           <div className="all-results-container">
-            {allResults.map((res, idx) => (
+            {comparisonRows.map((res, idx) => (
               <div key={idx} className="result-item">
                 <div className="result-header">
                   <span className="method-badge">{res.method?.toUpperCase()}</span>
                   <div className="result-metrics-inline">
-                    <span>{res.executionTime?.toFixed(2)} ms</span>
-                    <span>RMSE: {res.rmse !== null && res.rmse !== undefined ? res.rmse.toFixed(4) : 'N/A'}</span>
+                    <span>{res.configLabel}</span>
+                    <span>{formatNumber(res.executionTime)} ms</span>
+                    <span>RMSE: {formatNumber(res.rmse, 4)}</span>
                     {res.method !== 'serial' && (
-                      <span>{((allResults[0]?.executionTime || 1) / (res.executionTime || 1)).toFixed(2)}x speedup</span>
+                      <span>{formatNumber(res.speedup)}x speedup</span>
                     )}
                   </div>
                 </div>
